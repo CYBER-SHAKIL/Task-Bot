@@ -4,6 +4,7 @@ const config = require('./config');
 const path = require('path');
 const db = require('./db');
 const makeApi = require('./api');
+const makeAdminApi = require('./admin-api');
 
 if (!config.BOT_TOKEN) throw new Error('BOT_TOKEN missing');
 
@@ -61,6 +62,9 @@ bot.use(async (ctx, next) => {
   ctx.user = user;
   return next();
 });
+
+// Withdraw, proof review, admin commands (features.js)
+require('./features')(bot, { requireJoined });
 
 // Gate: channel join na thakle menu kaj korbe na
 async function requireJoined(ctx, next) {
@@ -150,10 +154,6 @@ bot.hears('🎁 Daily Bonus', requireJoined, async (ctx) => {
   return ctx.reply(`🎁 +${config.DAILY_BONUS}৳ Daily Bonus peyechen!`);
 });
 
-bot.hears('💸 Withdraw', requireJoined, (ctx) =>
-  ctx.reply('💸 Withdraw (bKash / Nagad) Step 6 e add hobe.')
-);
-
 bot.hears('📋 Tasks', requireJoined, (ctx) =>
   ctx.reply('📋 Tasks website open korte WEBAPP_URL (https) set korun, tarpor /start din.')
 );
@@ -164,12 +164,6 @@ bot.hears('ℹ️ Help', (ctx) =>
   )
 );
 
-// ---------- admin check (test) ----------
-bot.command('admin', (ctx) => {
-  if (!isAdmin(ctx.from.id)) return;
-  return ctx.reply('👑 Admin panel Step 5 e asbe.');
-});
-
 bot.catch((err, ctx) => console.error(`Error for ${ctx.updateType}:`, err));
 
 // ---------- server + launch ----------
@@ -179,8 +173,16 @@ async function main() {
 
   const app = express();
   app.get('/health', (_, res) => res.send('Bot is running'));
+  app.use('/api/admin', makeAdminApi(bot));
   app.use('/api', makeApi(bot));
-  app.use(express.static(path.join(__dirname, 'public')));
+
+  // website folder khuje ber kora: public / Public, ba ek folder upore thakleo cholbe
+  const fs = require('fs');
+  const pubDir = ['public', 'Public', '../public', '../Public']
+    .map((p) => path.join(__dirname, p))
+    .find((p) => fs.existsSync(path.join(p, 'index.html')));
+  console.log('Website folder:', pubDir || 'NOT FOUND (index.html paoa jayni)');
+  if (pubDir) app.use(express.static(pubDir));
 
   if (config.WEBHOOK_URL) {
     const hookPath = `/webhook/${config.BOT_TOKEN.split(':')[0]}`;
