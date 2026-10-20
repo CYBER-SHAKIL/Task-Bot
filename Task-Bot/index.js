@@ -4,7 +4,7 @@ const config = require('./config');
 const path = require('path');
 const db = require('./db');
 const makeApi = require('./api');
-const makeAdminApi = require('./admin-api');
+const makeAdminApi = require('./api');
 
 if (!config.BOT_TOKEN) throw new Error('BOT_TOKEN missing');
 
