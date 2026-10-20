@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Tasks</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg1: #eef2ff;
+    --bg2: #fdf2f8;
+    --ink: #0f172a;
+    --muted: #64748b;
+    --accent: #6366f1;
+    --accent-2: #8b5cf6;
+    --ok: #10b981;
+    --glass: rgba(255, 255, 255, 0.62);
+    --glass-border: rgba(255, 255, 255, 0.85);
+    --shadow: 0 8px 32px rgba(99, 102, 241, 0.10);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--ink);
+    background: linear-gradient(160deg, var(--bg1), var(--bg2)) fixed;
+    padding: 16px 16px 40px;
+  }
+  .wrap { max-width: 520px; margin: 0 auto; }
+
+  .balance {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #fff;
+    border-radius: 24px;
+    padding: 22px;
+    box-shadow: 0 14px 36px rgba(99, 102, 241, 0.30);
+    animation: rise .5s ease both;
+  }
+  .balance small { opacity: .8; font-size: 13px; }
+  .balance .amount { font-size: 38px; font-weight: 700; letter-spacing: -.5px; margin: 4px 0 2px; }
+  .balance .sub { font-size: 13px; opacity: .85; }
+
+  h2 { font-size: 15px; margin: 24px 4px 12px; color: var(--muted); font-weight: 600; letter-spacing: .3px; }
+
+  .card {
+    background: var(--glass);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid var(--glass-border);
+    border-radius: 20px;
+    padding: 16px;
+    margin-bottom: 12px;
+    box-shadow: var(--shadow);
+    animation: rise .5s ease both;
+  }
+  .row { display: flex; align-items: flex-start; gap: 12px; }
+  .icon {
+    width: 42px; height: 42px; border-radius: 14px; flex: none;
+    display: grid; place-items: center; font-size: 20px;
+    background: #fff; box-shadow: 0 2px 10px rgba(15, 23, 42, .06);
+  }
+  .info { flex: 1; min-width: 0; }
+  .title { font-weight: 600; font-size: 15px; }
+  .desc { color: var(--muted); font-size: 13px; margin-top: 3px; line-height: 1.4; }
+  .reward {
+    flex: none; font-weight: 700; font-size: 13px; color: var(--accent);
+    background: rgba(99, 102, 241, .10); padding: 5px 10px; border-radius: 999px;
+  }
+  .actions { display: flex; gap: 8px; margin-top: 14px; }
+  button {
+    flex: 1; border: 0; border-radius: 14px; padding: 12px; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: transform .15s ease, opacity .2s ease;
+  }
+  button:active { transform: scale(.97); }
+  .primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; }
+  .ghost { background: #fff; color: var(--ink); box-shadow: 0 2px 10px rgba(15, 23, 42, .06); }
+  .done { background: rgba(16, 185, 129, .12); color: var(--ok); }
+  button:disabled { opacity: .55; cursor: default; }
+
+  .msg { text-align: center; color: var(--muted); padding: 40px 12px; font-size: 14px; line-height: 1.6; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 20px);
+    background: var(--ink); color: #fff; padding: 12px 18px; border-radius: 14px; font-size: 14px;
+    opacity: 0; pointer-events: none; transition: all .3s ease; max-width: 88%; text-align: center;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="balance">
+    <small>Your Balance</small>
+    <div class="amount" id="bal">৳0.00</div>
+    <div class="sub" id="earned">Total earned ৳0.00</div>
+  </div>
+
+  <h2>TASKS</h2>
+  <div id="list"><div class="msg">Loading...</div></div>
+</div>
+<div id="toast"></div>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+const initData = tg ? tg.initData : '';
+
+const $ = (id) => document.getElementById(id);
+const money = (n) => '৳' + Number(n || 0).toFixed(2);
+const ICONS = { telegram_join: '📢', timer: '🎬', proof: '▶️' };
+
+let tasks = [];
+let offset = 0; // server time - client time
+let busy = false;
+
+function toast(text) {
+  const t = $('toast');
+  t.textContent = text;
+  t.classList.add('show');
+  clearTimeout(toast.h);
+  toast.h = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+async function api(path, method = 'GET') {
+  const r = await fetch('/api' + path, { method, headers: { 'X-Init-Data': initData } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'Something went wrong');
+  return j;
+}
+
+function openLink(url) {
+  if (!url) return;
+  if (tg && /^https:\/\/t\.me\//.test(url)) tg.openTelegramLink(url);
+  else if (tg) tg.openLink(url);
+  else window.open(url, '_blank');
+}
+
+function remaining(t) {
+  if (!t.startedAt) return t.seconds * 1000;
+  return Math.max(0, t.seconds * 1000 - (Date.now() + offset - t.startedAt));
+}
+
+function buttons(t) {
+  if (t.done) return '<button class="done" disabled>✅ Completed</button>';
+
+  if (t.type === 'telegram_join') {
+    return `<button class="ghost" data-act="open" data-id="${t.id}">Join</button>
+            <button class="primary" data-act="claim" data-id="${t.id}">Verify</button>`;
+  }
+  if (t.type === 'timer') {
+    if (!t.startedAt) return `<button class="primary" data-act="start" data-id="${t.id}">Start</button>`;
+    const left = remaining(t);
+    if (left > 0) {
+      return `<button class="ghost" data-act="open" data-id="${t.id}">Open link</button>
+              <button class="primary" disabled>Wait ${Math.ceil(left / 1000)}s</button>`;
+    }
+    return `<button class="primary" data-act="claim" data-id="${t.id}">Claim ${money(t.reward)}</button>`;
+  }
+  // proof (YouTube subscribe etc.)
+  return `<button class="ghost" data-act="open" data-id="${t.id}">Open</button>
+          <button class="primary" disabled>Proof soon</button>`;
+}
+
+function render() {
+  const list = $('list');
+  if (!tasks.length) { list.innerHTML = '<div class="msg">Ekhon kono task nai. Pore abar dekhun.</div>'; return; }
+  list.innerHTML = tasks.map((t, i) => `
+    <div class="card" style="animation-delay:${i * 60}ms">
+      <div class="row">
+        <div class="icon">${ICONS[t.type] || '⭐'}</div>
+        <div class="info">
+          <div class="title"></div>
+          <div class="desc"></div>
+        </div>
+        <div class="reward">+${money(t.reward)}</div>
+      </div>
+      <div class="actions">${buttons(t)}</div>
+    </div>`).join('');
+  // text user/admin data, so textContent diye boshano (XSS safe)
+  list.querySelectorAll('.card').forEach((el, i) => {
+    el.querySelector('.title').textContent = tasks[i].title;
+    el.querySelector('.desc').textContent = tasks[i].description;
+  });
+}
+
+async function load() {
+  try {
+    const [me, tl] = await Promise.all([api('/me'), api('/tasks')]);
+    $('bal').textContent = money(me.balance);
+    $('earned').textContent = 'Total earned ' + money(me.totalEarned);
+    tasks = tl.tasks;
+    offset = tl.now - Date.now();
+    render();
+  } catch (e) {
+    $('list').innerHTML = '<div class="msg"></div>';
+    $('list').firstChild.textContent = initData ? e.message : 'Ei page ta Telegram bot er 📋 Tasks button theke open korun.';
+  }
+}
+
+$('list').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-act]');
+  if (!b || busy) return;
+  const t = tasks.find((x) => x.id === b.dataset.id);
+  if (!t) return;
+  const act = b.dataset.act;
+
+  if (act === 'open') return openLink(t.url);
+
+  busy = true;
+  try {
+    if (act === 'start') {
+      const r = await api(`/tasks/${t.id}/start`, 'POST');
+      t.startedAt = r.startedAt;
+      offset = r.now - Date.now();
+      render();
+      openLink(t.url);
+    } else if (act === 'claim') {
+      const r = await api(`/tasks/${t.id}/claim`, 'POST');
+      t.done = true;
+      $('bal').textContent = money(r.balance);
+      render();
+      toast(`🎉 +${money(r.reward)} added!`);
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+      load();
+    }
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    busy = false;
+  }
+});
+
+// countdown ticker (shudhu timer task cholle)
+setInterval(() => {
+  if (tasks.some((t) => t.type === 'timer' && t.startedAt && !t.done && remaining(t) >= 0)) render();
+}, 1000);
+
+load();
+</script>
+</body>
+</html>
+  
