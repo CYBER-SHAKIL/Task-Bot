@@ -194,8 +194,165 @@ async function completeTask(uid, task) {
   });
 }
 
+// ---------- user state (withdraw / proof flow) ----------
+async function setState(uid, state) {
+  await users().doc(String(uid)).update({ state: state || null });
+}
+
+async function findUser(q) {
+  const s = String(q || '').trim().replace(/^@/, '');
+  if (!s) return null;
+  if (/^\d+$/.test(s)) return getUser(Number(s));
+  const snap = await users().where('username', '==', s).limit(1).get();
+  if (snap.empty) return null;
+  const d = snap.docs[0];
+  return { tgId: Number(d.id), ...d.data() };
+}
+
+async function listUserIds() {
+  const snap = await users().select().get();
+  return snap.docs.map((d) => Number(d.id));
+}
+
+// ---------- proof submissions (YouTube subscribe etc.) ----------
+async function createSubmission({ uid, taskId, name, title, reward, fileId, uniqueId }) {
+  // ekta screenshot onno account e abar use kora jabe na
+  const dup = await db.collection('submissions').where('uniqueId', '==', uniqueId).get();
+  if (dup.docs.some((d) => d.data().status !== 'rejected')) return { ok: false, error: 'duplicate' };
+
+  const sRef = db.collection('submissions').doc(`${uid}_${taskId}`);
+  const cRef = db.collection('completions').doc(`${uid}_${taskId}`);
+  return db.runTransaction(async (t) => {
+    const [s, c] = await t.getAll(sRef, cRef);
+    if (c.exists) return { ok: false, error: 'done' };
+    if (s.exists && s.data().status === 'pending') return { ok: false, error: 'pending' };
+    const data = {
+      uid: Number(uid), taskId, name: name || '', title, reward, fileId, uniqueId,
+      status: 'pending', at: Date.now(),
+    };
+    t.set(sRef, data);
+    return { ok: true, data };
+  });
+}
+
+async function getProofStatuses(uid) {
+  const snap = await db.collection('submissions').where('uid', '==', Number(uid)).get();
+  const out = {};
+  snap.docs.forEach((d) => { out[d.data().taskId] = d.data().status; });
+  return out;
+}
+
+async function resolveSubmission(uid, taskId, approve) {
+  const sRef = db.collection('submissions').doc(`${uid}_${taskId}`);
+  const cRef = db.collection('completions').doc(`${uid}_${taskId}`);
+  const uRef = users().doc(String(uid));
+  return db.runTransaction(async (t) => {
+    const [s, c] = await t.getAll(sRef, cRef);
+    if (!s.exists || s.data().status !== 'pending') return { ok: false, error: 'handled' };
+    const sub = s.data();
+    if (!approve) {
+      t.update(sRef, { status: 'rejected', resolvedAt: Date.now() });
+      return { ok: true, sub };
+    }
+    t.update(sRef, { status: 'approved', resolvedAt: Date.now() });
+    if (!c.exists) {
+      t.set(cRef, { uid: Number(uid), taskId, reward: sub.reward, at: Date.now() });
+      t.update(uRef, {
+        balance: FV.increment(sub.reward),
+        totalEarned: FV.increment(sub.reward),
+      });
+    }
+    return { ok: true, sub };
+  });
+}
+
+// ---------- withdrawals ----------
+async function createWithdrawal({ uid, method, number, amount }) {
+  const uRef = users().doc(String(uid));
+  const wRef = db.collection('withdrawals').doc();
+  return db.runTransaction(async (t) => {
+    const s = await t.get(uRef);
+    if (!s.exists) return { ok: false, error: 'no_user' };
+    const u = s.data();
+    if (u.banned) return { ok: false, error: 'banned' };
+    if (amount > (u.balance || 0) + 1e-9) return { ok: false, error: 'low' };
+    const w = {
+      uid: Number(uid), name: u.name || '', method, number, amount,
+      status: 'pending', at: Date.now(),
+    };
+    t.update(uRef, { balance: FV.increment(-amount) });
+    t.set(wRef, w);
+    return { ok: true, id: wRef.id, w };
+  });
+}
+
+async function resolveWithdrawal(id, paid) {
+  const wRef = db.collection('withdrawals').doc(String(id));
+  return db.runTransaction(async (t) => {
+    const s = await t.get(wRef);
+    if (!s.exists || s.data().status !== 'pending') return { ok: false, error: 'handled' };
+    const w = s.data();
+    t.update(wRef, { status: paid ? 'paid' : 'rejected', resolvedAt: Date.now() });
+    // reject hole taka balance e ferot
+    if (!paid) t.update(users().doc(String(w.uid)), { balance: FV.increment(w.amount) });
+    return { ok: true, w };
+  });
+}
+
+async function listPending() {
+  const [subs, wds] = await Promise.all([
+    db.collection('submissions').where('status', '==', 'pending').get(),
+    db.collection('withdrawals').where('status', '==', 'pending').get(),
+  ]);
+  return {
+    submissions: subs.docs.map((d) => d.data()),
+    withdrawals: wds.docs.map((d) => ({ id: d.id, ...d.data() })),
+  };
+}
+
+// ---------- admin ----------
+async function getStats() {
+  const count = async (q) => (await q.count().get()).data().count;
+  const [total, verified, proofs, wds, paidSnap] = await Promise.all([
+    count(users()),
+    count(users().where('verified', '==', true)),
+    count(db.collection('submissions').where('status', '==', 'pending')),
+    count(db.collection('withdrawals').where('status', '==', 'pending')),
+    db.collection('withdrawals').where('status', '==', 'paid').get(),
+  ]);
+  const paidTotal = paidSnap.docs.reduce((sum, d) => sum + (d.data().amount || 0), 0);
+  return {
+    users: total, verified,
+    pendingProofs: proofs, pendingWithdrawals: wds,
+    paidCount: paidSnap.size, paidTotal,
+  };
+}
+
+async function listAllTasks() {
+  const snap = await tasksCol().get();
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (a.order || 0) - (b.order || 0));
+}
+
+async function createTask(data) {
+  const ref = await tasksCol().add({ ...data, active: true, createdAt: Date.now() });
+  return ref.id;
+}
+
+async function setTaskActive(id, active) {
+  await tasksCol().doc(String(id)).update({ active: !!active });
+}
+
+async function deleteTask(id) {
+  await tasksCol().doc(String(id)).delete();
+}
+
 module.exports = {
   connectDB, getUser, createUser, updateUser, incUser, claimVerify, claimDaily,
   seedTasks, listTasks, getTask, getCompletedTaskIds, getStarts, startTask, completeTask,
+  setState, findUser, listUserIds,
+  createSubmission, getProofStatuses, resolveSubmission,
+  createWithdrawal, resolveWithdrawal, listPending,
+  getStats, listAllTasks, createTask, setTaskActive, deleteTask,
 };
-                       
