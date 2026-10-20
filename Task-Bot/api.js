@@ -72,11 +72,10 @@ module.exports = function makeApi(bot) {
 
   router.get('/tasks', wrap(async (req, res) => {
     const uid = req.user.tgId;
-    const [tasks, done, starts, proofs] = await Promise.all([
+    const [tasks, done, starts] = await Promise.all([
       db.listTasks(),
       db.getCompletedTaskIds(uid),
       db.getStarts(uid),
-      db.getProofStatuses(uid),
     ]);
     res.json({
       now: Date.now(),
@@ -90,7 +89,6 @@ module.exports = function makeApi(bot) {
         seconds: t.seconds || 0,
         done: done.has(t.id),
         startedAt: starts[t.id] || null,
-        proofStatus: proofs[t.id] || null,
       })),
     });
   }));
@@ -103,24 +101,6 @@ module.exports = function makeApi(bot) {
     }
     const startedAt = await db.startTask(req.user.tgId, task.id);
     res.json({ startedAt, now: Date.now() });
-  }));
-
-  // Proof task: user ke bot chat e screenshot pathate bole
-  router.post('/tasks/:id/proof-start', wrap(async (req, res) => {
-    const uid = req.user.tgId;
-    const task = await db.getTask(req.params.id);
-    if (!task || !task.active || task.type !== 'proof') {
-      return res.status(404).json({ error: 'Task paoa jayni' });
-    }
-    const [done, proofs] = await Promise.all([db.getCompletedTaskIds(uid), db.getProofStatuses(uid)]);
-    if (done.has(task.id)) return res.status(400).json({ error: 'Ei task ager e complete kora hoyeche' });
-    if (proofs[task.id] === 'pending') return res.status(400).json({ error: 'Proof ekhono review hocche' });
-
-    await db.setState(uid, { step: 'proof', taskId: task.id });
-    await bot.telegram
-      .sendMessage(uid, `📸 "${task.title}"\n\nEi chat e screenshot ta photo hishebe pathan (file hishebe na).\nCancel korte /cancel`)
-      .catch(() => {});
-    res.json({ ok: true });
   }));
 
   // Reward claim
@@ -153,5 +133,3 @@ module.exports = function makeApi(bot) {
 
   return router;
 };
-
-module.exports.verifyInitData = verifyInitData;
