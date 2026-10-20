@@ -20,15 +20,18 @@ Telegram bot jekhane user channel join kore, website (Mini App) theke task compl
 Task-Bot/
 ├── index.js
 ├── api.js
+├── admin-api.js
+├── features.js
 ├── db.js
 ├── config.js
 ├── package.json
 ├── .gitignore
-└── public/          <- choto haater "public" hote hobe
-    └── index.html   <- website (Mini App)
+└── public/
+    ├── index.html   <- user website (Mini App)
+    └── admin.html   <- admin panel
 ```
 
-`public` folder ta `index.js` er pashe-i thakbe, ar nam shob choto haater.
+`public` folder (choto haater) `index.js` er pashe-i rakho. `index.html` ar `admin.html` ek folder e thakbe.
 
 ## Environment variables
 
@@ -81,6 +84,13 @@ Bot ke force-join channel e **Admin** banate hobe, noile join check kaj korbe na
 
 - [x] Step 1: Bot core, force-join, menu
 - [x] Step 2: Task API + Mini App website
-- [ ] Step 3: YouTube proof submit + admin panel
-- [ ] Step 4: Withdraw (bKash / Nagad)
-- [ ] Step 5: Polish, broadcast, stats
+- [x] Step 3: YouTube proof submit + admin approve/reject
+- [x] Step 4: Withdraw (bKash / Nagad), admin Paid / Reject
+- [x] Step 5: Admin panel (stats, tasks, users, broadcast)
+
+## Admin
+
+- Bot e `/admin` (shudhu admin), Admin Panel khole
+- Bot e `/pending`, pending proof ar withdraw abar pathay
+- Proof ar withdraw bot chat e Approve / Paid button soho ashe
+- Withdraw e taka tumi nijer bKash/Nagad theke pathabe, tarpor **Paid** chapbe
