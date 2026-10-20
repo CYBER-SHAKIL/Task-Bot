@@ -1,5 +1,0 @@
-node_modules/
-.env
-*.json.bak
-firebase-key*.json
-serviceAccount*.json
