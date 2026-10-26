@@ -65,6 +65,13 @@ Render: Service -> Environment -> Add Environment Variable
 
 Bot ke force-join channel e **Admin** banate hobe, noile join check kaj korbe na.
 
+## Somossha hole
+
+- **`Cannot GET /`**: website file paoa jachhe na. Render Logs e `Website folder:` line dekho. `NOT FOUND` hole `public/index.html` ta `index.js` er pashe rakho (server `Public`/`public` duita-i khuje, kintu folder ta thakte hobe).
+- **Build e `package.json` paoa jay na**: Render Settings -> Root Directory e folder er nam dao.
+- **Join verify kaj kore na**: bot ke channel er Admin banao.
+- Render free plan e 15 min kaj na thakle server ghumay, prothom reply slow hoy. UptimeRobot diye `https://tomar-app.onrender.com/health` 5 min por por ping korle jage thake.
+
 ## Force-join channel add kora
 
 `config.js` e `CHANNELS` array te notun object add koro:
