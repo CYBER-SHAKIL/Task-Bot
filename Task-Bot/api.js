@@ -130,7 +130,7 @@ module.exports = function makeApi(bot) {
     if (!task || !task.active) return res.status(404).json({ error: 'Task paoa jayni' });
 
     if (task.type === 'proof') {
-      return res.status(400).json({ error: 'Ei task e proof submit lagbe (shishrei asche)' });
+      return res.status(400).json({ error: 'Ei task e bot e screenshot proof submit korte hobe' });
     }
 
     if (task.type === 'telegram_join') {

@@ -1,10 +1,12 @@
+const fs = require('fs');
+const path = require('path');
 const { Telegraf, Markup } = require('telegraf');
 const express = require('express');
 const config = require('./config');
-const path = require('path');
 const db = require('./db');
 const makeApi = require('./api');
-const makeAdminApi = require('./api');
+const makeAdminApi = require('./admin-api');
+const registerFeatures = require('./features');
 
 if (!config.BOT_TOKEN) throw new Error('BOT_TOKEN missing');
 
@@ -13,6 +15,7 @@ const bot = new Telegraf(config.BOT_TOKEN);
 // ---------- helpers ----------
 const isAdmin = (id) => config.ADMIN_IDS.includes(id);
 const fullName = (from) => [from.first_name, from.last_name].filter(Boolean).join(' ');
+const MENU = ['📋 Tasks', '💰 Balance', '👥 Refer', '🎁 Daily Bonus', '💸 Withdraw', 'ℹ️ Help'];
 
 async function getMissingChannels(telegram, userId) {
   const missing = [];
@@ -54,53 +57,15 @@ const sendJoinPrompt = (ctx) =>
 
 const sendMainMenu = (ctx) => ctx.reply('🏠 Main Menu', mainMenu());
 
-// ---------- middleware: user load + ban check ----------
-bot.use(async (ctx, next) => {
-  if (!ctx.from || ctx.chat?.type !== 'private') return next();
-  const user = await db.getUser(ctx.from.id);
-  if (user?.banned) return ctx.reply('🚫 Apnar account ban kora hoyeche.');
-  ctx.user = user;
-  return next();
-});
-
-// Withdraw, proof review, admin commands (features.js)
-require('./features')(bot, { requireJoined });
-
-// Gate: channel join na thakle menu kaj korbe na
+// Channel join na thakle menu kaj korbe na
 async function requireJoined(ctx, next) {
   const missing = await getMissingChannels(ctx.telegram, ctx.from.id);
   if (missing.length) return ctx.reply('⚠️ Age sob channel join korun:', joinKeyboard());
   return next();
 }
 
-// ---------- /start ----------
-bot.start(async (ctx) => {
-  const refId = Number(ctx.startPayload) || null;
-
-  if (!ctx.user) {
-    await db.createUser({
-      tgId: ctx.from.id,
-      name: fullName(ctx.from),
-      username: ctx.from.username,
-      referredBy: refId && refId !== ctx.from.id ? refId : null,
-    });
-  }
-
-  const missing = await getMissingChannels(ctx.telegram, ctx.from.id);
-  if (missing.length) return sendJoinPrompt(ctx);
-  return sendMainMenu(ctx);
-});
-
-// ---------- Verify ----------
-bot.action('verify', async (ctx) => {
-  const missing = await getMissingChannels(ctx.telegram, ctx.from.id);
-  if (missing.length) {
-    return ctx.answerCbQuery('❌ Ekhono sob channel join kora hoyni!', { show_alert: true });
-  }
-
-  await ctx.answerCbQuery('✅ Verified!');
-  try { await ctx.deleteMessage(); } catch (_) {}
-
+// User ke verified mark kore, referral bonus dey (ekbar-i)
+async function verifyUser(ctx) {
   let user = await db.getUser(ctx.from.id);
   if (!user) {
     user = await db.createUser({
@@ -125,7 +90,54 @@ bot.action('verify', async (ctx) => {
         .catch(() => {});
     }
   }
+}
 
+// ---------- middleware: user load, ban check, state reset ----------
+bot.use(async (ctx, next) => {
+  if (!ctx.from || ctx.chat?.type !== 'private') return next();
+  const user = await db.getUser(ctx.from.id);
+  if (user?.banned) return ctx.reply('🚫 Apnar account ban kora hoyeche.');
+
+  // menu button / command chaple cholte thaka withdraw/proof flow bondho
+  const text = ctx.message?.text;
+  if (user?.state && text && (MENU.includes(text) || text.startsWith('/'))) {
+    await db.setState(ctx.from.id, null);
+    user.state = null;
+  }
+  ctx.user = user;
+  return next();
+});
+
+// ---------- /start ----------
+bot.start(async (ctx) => {
+  const payload = ctx.startPayload || '';
+  const refId = /^\d+$/.test(payload) ? Number(payload) : null;
+
+  if (!ctx.user) {
+    await db.createUser({
+      tgId: ctx.from.id,
+      name: fullName(ctx.from),
+      username: ctx.from.username,
+      referredBy: refId && refId !== ctx.from.id ? refId : null,
+    });
+  }
+
+  const missing = await getMissingChannels(ctx.telegram, ctx.from.id);
+  if (missing.length) return sendJoinPrompt(ctx);
+
+  await verifyUser(ctx);
+  return sendMainMenu(ctx);
+});
+
+// ---------- Verify ----------
+bot.action('verify', async (ctx) => {
+  const missing = await getMissingChannels(ctx.telegram, ctx.from.id);
+  if (missing.length) {
+    return ctx.answerCbQuery('❌ Ekhono sob channel join kora hoyni!', { show_alert: true });
+  }
+  await ctx.answerCbQuery('✅ Verified!');
+  try { await ctx.deleteMessage(); } catch (_) {}
+  await verifyUser(ctx);
   return sendMainMenu(ctx);
 });
 
@@ -160,29 +172,53 @@ bot.hears('📋 Tasks', requireJoined, (ctx) =>
 
 bot.hears('ℹ️ Help', (ctx) =>
   ctx.reply(
-    'ℹ️ Kivabe kaj kore:\n1. Channel join kore verify korun\n2. 📋 Tasks e jan, task complete korun\n3. Taka add hobe, bKash/Nagad e withdraw korun'
+    `ℹ️ Kivabe kaj kore:\n1. Channel join kore verify korun\n2. 📋 Tasks e jan, task complete korun\n3. Balance ${config.MIN_WITHDRAW}৳ hole 💸 Withdraw diye bKash/Nagad e nin`
   )
 );
 
+// ---------- withdraw, proof review, /admin, /pending (features.js) ----------
+registerFeatures(bot, { requireJoined });
+
 bot.catch((err, ctx) => console.error(`Error for ${ctx.updateType}:`, err));
+
+// ---------- website (Mini App) file khuje ber kora ----------
+// Folder er nam "Public"/"public" je-i hok, ba ek dhap upore thakleo khuje nibe
+function findPublicDir() {
+  for (const base of [__dirname, path.join(__dirname, '..')]) {
+    try {
+      const dir = fs
+        .readdirSync(base, { withFileTypes: true })
+        .find((e) => e.isDirectory() && e.name.toLowerCase() === 'public');
+      if (dir && fs.existsSync(path.join(base, dir.name, 'index.html'))) {
+        return path.join(base, dir.name);
+      }
+    } catch (_) {}
+  }
+  return null;
+}
 
 // ---------- server + launch ----------
 async function main() {
   await db.connectDB();
   await db.seedTasks();
+  bot.botInfo = await bot.telegram.getMe();
 
   const app = express();
   app.get('/health', (_, res) => res.send('Bot is running'));
+  // admin age, noile /api er user-auth oi path ke atke dey
   app.use('/api/admin', makeAdminApi(bot));
   app.use('/api', makeApi(bot));
 
-  // website folder khuje ber kora: public / Public, ba ek folder upore thakleo cholbe
-  const fs = require('fs');
-  const pubDir = ['public', 'Public', '../public', '../Public']
-    .map((p) => path.join(__dirname, p))
-    .find((p) => fs.existsSync(path.join(p, 'index.html')));
-  console.log('Website folder:', pubDir || 'NOT FOUND (index.html paoa jayni)');
-  if (pubDir) app.use(express.static(pubDir));
+  const publicDir = findPublicDir();
+  console.log('Website folder:', publicDir || 'NOT FOUND');
+  app.get('/', (req, res) => {
+    const file = publicDir
+      ? path.join(publicDir, 'index.html')
+      : fs.existsSync(path.join(__dirname, 'index.html')) && path.join(__dirname, 'index.html');
+    if (file) return res.sendFile(file);
+    res.status(500).send('index.html paoa jayni. Repo te public/index.html (choto haater public) rakhun.');
+  });
+  if (publicDir) app.use(express.static(publicDir));
 
   if (config.WEBHOOK_URL) {
     const hookPath = `/webhook/${config.BOT_TOKEN.split(':')[0]}`;
